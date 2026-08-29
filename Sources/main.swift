@@ -175,8 +175,31 @@ func render(_ path: String) -> Int {
     }
 }
 
+/// Arranca la app y abre el panel de inmediato, para revisar el vidrio real en pantalla.
+func demo() {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        delegate.status?.openPanel()
+        for window in NSApp.windows where window.isVisible {
+            let content = window.contentView.map { String(describing: type(of: $0)) } ?? "-"
+            print("ventana=\(type(of: window)) contenido=\(content) frame=\(window.frame)")
+        }
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })
+            ?? NSScreen.main {
+            print("visibleFrame.maxY=\(screen.visibleFrame.maxY)")
+        }
+        fflush(stdout)
+    }
+    app.run()
+}
+
 let args = CommandLine.arguments
-if args.count > 1 && args[1] == "--once" {
+if args.count > 1 && args[1] == "--demo" {
+    demo()
+} else if args.count > 1 && args[1] == "--once" {
     cliOnce()
 } else if args.count == 3 && args[1] == "--simulate" {
     exit(Int32(simulate(args[2])))

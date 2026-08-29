@@ -168,29 +168,13 @@ final class StatusBarController: NSObject {
         for provider: QuotaProvider,
         base: [NSAttributedString.Key: Any]
     ) -> NSAttributedString {
-        let names: [String]
-        switch provider.id {
-        case "claude": names = ["sparkle", "sparkles", "asterisk.circle"]
-        case "codex":
-            names = [
-                "chevron.left.forwardslash.chevron.right",
-                "chevron.left.slash.chevron.right",
-                "curlybraces"
-            ]
-        default: names = []
+        guard let image = ProviderIcon.image(for: provider.id, pointSize: 11) else {
+            return NSAttributedString(string: provider.badge, attributes: base)
         }
-        let configuration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
-        for name in names {
-            guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
-                continue
-            }
-            image.isTemplate = true
-            let attachment = NSTextAttachment()
-            attachment.image = image.withSymbolConfiguration(configuration)
-            attachment.bounds = NSRect(x: 0, y: -1, width: 12, height: 12)
-            return NSAttributedString(attachment: attachment)
-        }
-        return NSAttributedString(string: provider.badge, attributes: base)
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        attachment.bounds = NSRect(x: 0, y: -1, width: 12, height: 12)
+        return NSAttributedString(attachment: attachment)
     }
 
     /// Añade un porcentaje con color de severidad o atenuado si falló el último fetch.
@@ -224,6 +208,12 @@ final class StatusBarController: NSObject {
         )
     }
 
+    /// Abre el panel sin pasar por el clic, para inspeccionarlo desde la línea de comandos.
+    func openPanel() {
+        guard let button = item.button else { return }
+        panel.show(relativeTo: button, item: item)
+    }
+
     /// Muestra el menú contextual o abre el panel desde la barra de estado.
     @objc private func clicked(_ sender: Any?) {
         guard let button = item.button, let event = NSApp.currentEvent else {
@@ -232,9 +222,17 @@ final class StatusBarController: NSObject {
 
         if event.type == .rightMouseUp {
             panel.menu().popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
-        } else {
-            requestRefresh(force: false, onlyIfStale: true)
-            panel.show(relativeTo: button, item: item)
+            return
         }
+
+        // El clic sobre la barra alterna: si el panel ya está abierto, este clic lo cierra.
+        // `closedByCurrentClick` cubre el caso en que el propio clic ya lo cerró al quitarle el
+        // foco, para que el mouseUp no lo vuelva a abrir de inmediato.
+        if panel.isOpen || panel.closedByCurrentClick {
+            panel.dismiss()
+            return
+        }
+        requestRefresh(force: false, onlyIfStale: true)
+        panel.show(relativeTo: button, item: item)
     }
 }

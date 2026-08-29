@@ -74,6 +74,9 @@ ya les hablan.
 
 # Dibujar el panel a PNG en tema claro y oscuro, sin abrir ventanas
 ./CuotaIA.app/Contents/MacOS/CuotaIA --render /tmp/panel.png
+
+# Abrir el panel real en pantalla, sin clic, para revisar el vidrio
+./CuotaIA.app/Contents/MacOS/CuotaIA --demo
 ```
 
 `--once` sirve para meter la cuota en tu `statusline`, un script o un cron.
@@ -81,11 +84,15 @@ ya les hablan.
 ## Cómo está hecha
 
 AppKit puro, sin dependencias, sin gestor de paquetes: `build.sh` invoca `swiftc` sobre
-`Sources/` y arma el bundle. El panel es un `NSPanel` sin borde con un
-`NSVisualEffectView` de material `menu` como contenido: el mismo vidrio del sistema que usan
-Wi-Fi o Control Center, que se adapta solo al fondo, al tema claro/oscuro y a "Reducir
-transparencia". No es un `NSPopover` — ese pinta su propio fondo opaco y no se cierra cuando
-abres otro ítem de la barra.
+`Sources/` y arma el bundle. El panel es un `NSPanel` sin borde cuyo contenido va dentro de un
+`NSGlassEffectView` — el vidrio del sistema de macOS 26, el mismo que usan Control Center y
+Clima, que se adapta solo al fondo, al tema claro/oscuro y a "Reducir transparencia". En macOS
+anteriores cae a un `NSVisualEffectView` de material `menu`. No es un `NSPopover` — ese pinta su
+propio fondo opaco y no se cierra cuando abres otro ítem de la barra.
+
+`build.sh` elige el `swiftc` más nuevo de los instalados en vez de confiar en `xcrun`: un Xcode
+antiguo conviviendo con unos Command Line Tools recientes deja a `xcrun` apuntando al compilador
+viejo, que no conoce las API de macOS 26.
 
 ```
 Sources/
@@ -95,6 +102,7 @@ Sources/
   UsageHistory.swift        muestreo, persistencia y detector
   Notifier.swift            notificaciones y cooldowns
   StatusBarController.swift el ícono, el texto y el timer
+  ProviderIcon.swift        el símbolo de cada herramienta, compartido por barra y panel
   PanelUI.swift             el panel de vidrio
   LoginItem.swift           arranque automático vía LaunchAgent
   main.swift                arranque y modos de terminal

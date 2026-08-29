@@ -38,6 +38,15 @@ final class ProgressView: NSView {
 
 /// Construye y presenta el panel emergente de estado y acciones.
 final class PanelUI: NSObject {
+    /// Radio de las esquinas del vidrio, alineado con los popovers del sistema.
+    private static let cornerRadius: CGFloat = 18
+    /// Separación entre el borde inferior de la barra de menús y el techo del panel.
+    private static let menuBarGap: CGFloat = 5
+    /// Ancho total del panel; los contenidos ocupan este ancho menos los márgenes laterales.
+    private static let panelWidth: CGFloat = 320
+    /// Ancho útil de cada fila una vez descontados los márgenes laterales.
+    private static let rowWidth = panelWidth - 36
+
     var onRefresh: (() -> Void)?
     private let login = LoginItem()
     private let glass: NSView
@@ -77,8 +86,14 @@ final class PanelUI: NSObject {
         guard let screen = window.screen ?? NSScreen.screens.first else { return }
         let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
         let size = panel.frame.size
+        // El techo cuelga del borde inferior de la barra de menús, no del botón: el botón está
+        // centrado dentro de la barra y colgar de él deja el panel más arriba que los del sistema.
+        let anchor = min(screenRect.minY, screen.visibleFrame.maxY) - PanelUI.menuBarGap
         let x = min(max(screenRect.midX - size.width / 2, visible.minX), visible.maxX - size.width)
-        let y = min(max(screenRect.minY - 6 - size.height, visible.minY), visible.maxY - size.height)
+        // El techo se limita contra `visibleFrame` sin margen: el inset de 8 es para los bordes
+        // laterales e inferior, y aplicarlo arriba empujaría el panel más abajo que el gap pedido.
+        let ceiling = screen.visibleFrame.maxY - size.height
+        let y = min(max(anchor - size.height, visible.minY), ceiling)
 
         panel.setFrameOrigin(NSPoint(x: x, y: y))
         highlightedItem = item
@@ -157,17 +172,33 @@ final class PanelUI: NSObject {
     }
 
     /// Configura las propiedades compartidas por la raíz de vidrio y la opaca de render.
+    ///
+    /// En macOS 26 el vidrio del sistema es `NSGlassEffectView`: es el material que usan Control
+    /// Center y Clima. `NSVisualEffectView` sigue existiendo, pero en Tahoe dibuja un fondo casi
+    /// opaco. La rama antigua queda solo como respaldo para versiones anteriores.
     private static func makeRoot(glass: Bool, appearance: NSAppearance?) -> NSView {
         let root: NSView
-        if glass {
+        if glass, #available(macOS 26.0, *) {
+            let effect = NSGlassEffectView()
+            effect.style = .regular
+            effect.cornerRadius = cornerRadius
+            root = effect
+        } else if glass {
             let effect = NSVisualEffectView()
             effect.material = .menu
             effect.blendingMode = .behindWindow
             effect.state = .active
+            effect.wantsLayer = true
+            effect.layer?.cornerRadius = cornerRadius
+            effect.layer?.cornerCurve = .continuous
+            effect.layer?.masksToBounds = true
             root = effect
         } else {
             root = NSView()
             root.wantsLayer = true
+            root.layer?.cornerRadius = cornerRadius
+            root.layer?.cornerCurve = .continuous
+            root.layer?.masksToBounds = true
             if let appearance = appearance {
                 root.appearance = appearance
                 appearance.performAsCurrentDrawingAppearance {
@@ -175,12 +206,8 @@ final class PanelUI: NSObject {
                 }
             }
         }
-        root.wantsLayer = true
-        root.layer?.cornerRadius = 14
-        root.layer?.cornerCurve = .continuous
-        root.layer?.masksToBounds = true
         root.translatesAutoresizingMaskIntoConstraints = false
-        root.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        root.widthAnchor.constraint(equalToConstant: panelWidth).isActive = true
         return root
     }
 
@@ -190,7 +217,13 @@ final class PanelUI: NSObject {
         content.alignment = .leading
         content.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
         content.translatesAutoresizingMaskIntoConstraints = false
-        glass.addSubview(content)
+        // `NSGlassEffectView` solo garantiza que su `contentView` quede dentro del vidrio: una
+        // subvista suelta no tiene z-order definido y puede terminar debajo del material.
+        if #available(macOS 26.0, *), let effect = glass as? NSGlassEffectView {
+            effect.contentView = content
+        } else {
+            glass.addSubview(content)
+        }
         NSLayoutConstraint.activate([
             content.leadingAnchor.constraint(equalTo: glass.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: glass.trailingAnchor),
@@ -221,6 +254,10 @@ final class PanelUI: NSObject {
         let title = horizontal()
         let name = label(provider.displayName, size: 14, weight: .semibold)
         let plan = label(snapshot.plan ?? "", size: 11, color: .secondaryLabelColor)
+        if let mark = iconView(for: provider) {
+            title.addArrangedSubview(mark)
+            title.setCustomSpacing(6, after: mark)
+        }
         title.addArrangedSubview(name)
         title.addArrangedSubview(expander())
         title.addArrangedSubview(plan)
@@ -282,19 +319,64 @@ final class PanelUI: NSObject {
         return box
     }
 
+    /// Dibuja el mismo símbolo que la barra de menús, para identificar la tarjeta de un vistazo.
+    private func iconView(for provider: QuotaProvider) -> NSView? {
+        guard let image = ProviderIcon.image(for: provider.id, pointSize: 13, weight: .medium) else {
+            return nil
+        }
+        let view = NSImageView(image: image)
+        view.contentTintColor = .labelColor
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            view.widthAnchor.constraint(equalToConstant: 16),
+            view.heightAnchor.constraint(equalToConstant: 16)
+        ])
+        return view
+    }
+
+    /// Sub-límite de la ventana semanal, con su propia barra para que se vea cuánto lleva.
     private func detailRow(_ detail: QuotaDetail) -> NSView {
-        let row = horizontal()
-        let name = label(detail.label, size: 11, color: .tertiaryLabelColor)
-        let value = label(String(format: "%.0f%%", detail.percent), size: 11, color: .tertiaryLabelColor, mono: true)
-        row.addArrangedSubview(name)
+        let indent: CGFloat = 12
+        let width = PanelUI.rowWidth - indent
+
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: width).isActive = true
+        row.addArrangedSubview(label(detail.label, size: 11, color: .secondaryLabelColor))
         row.addArrangedSubview(expander())
-        row.addArrangedSubview(value)
-        let indent = NSView()
-        indent.translatesAutoresizingMaskIntoConstraints = false
-        indent.widthAnchor.constraint(equalToConstant: 12).isActive = true
+        row.addArrangedSubview(
+            label(
+                String(format: "%.0f%%", detail.percent),
+                size: 11,
+                color: .secondaryLabelColor,
+                mono: true
+            )
+        )
+
+        let bar = ProgressView()
+        bar.percent = detail.percent
+        bar.severity = Severity(percent: detail.percent)
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.heightAnchor.constraint(equalToConstant: 4).isActive = true
+        bar.widthAnchor.constraint(equalToConstant: width).isActive = true
+
+        let column = NSStackView()
+        column.orientation = .vertical
+        column.spacing = 4
+        column.alignment = .leading
+        column.translatesAutoresizingMaskIntoConstraints = false
+        column.widthAnchor.constraint(equalToConstant: width).isActive = true
+        column.addArrangedSubview(row)
+        column.addArrangedSubview(bar)
+
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.widthAnchor.constraint(equalToConstant: indent).isActive = true
         let indented = horizontal()
-        indented.addArrangedSubview(indent)
-        indented.addArrangedSubview(row)
+        indented.addArrangedSubview(spacer)
+        indented.addArrangedSubview(column)
         return indented
     }
 
@@ -304,7 +386,7 @@ final class PanelUI: NSObject {
         progress.severity = Severity(percent: window.percent)
         progress.translatesAutoresizingMaskIntoConstraints = false
         progress.heightAnchor.constraint(equalToConstant: 6).isActive = true
-        progress.widthAnchor.constraint(equalToConstant: 284).isActive = true
+        progress.widthAnchor.constraint(equalToConstant: PanelUI.rowWidth).isActive = true
         return progress
     }
 
@@ -312,7 +394,7 @@ final class PanelUI: NSObject {
         let reset = label(resetText(date), size: 11, color: .tertiaryLabelColor)
         reset.alignment = .right
         reset.translatesAutoresizingMaskIntoConstraints = false
-        reset.widthAnchor.constraint(equalToConstant: 284).isActive = true
+        reset.widthAnchor.constraint(equalToConstant: PanelUI.rowWidth).isActive = true
         return reset
     }
 
@@ -359,7 +441,7 @@ final class PanelUI: NSObject {
         let line = NSBox()
         line.boxType = .separator
         line.translatesAutoresizingMaskIntoConstraints = false
-        line.widthAnchor.constraint(equalToConstant: 284).isActive = true
+        line.widthAnchor.constraint(equalToConstant: PanelUI.rowWidth).isActive = true
         return line
     }
 
@@ -369,7 +451,7 @@ final class PanelUI: NSObject {
         stack.spacing = spacing
         stack.alignment = .leading
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.widthAnchor.constraint(equalToConstant: 284).isActive = true
+        stack.widthAnchor.constraint(equalToConstant: PanelUI.rowWidth).isActive = true
         return stack
     }
 
@@ -378,7 +460,7 @@ final class PanelUI: NSObject {
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.widthAnchor.constraint(equalToConstant: 284).isActive = true
+        stack.widthAnchor.constraint(equalToConstant: PanelUI.rowWidth).isActive = true
         return stack
     }
 
@@ -422,6 +504,11 @@ final class PanelUI: NSObject {
                 self.close()
                 return nil
             }
+            // Un clic sobre el ítem de la barra NO cierra aquí: lo resuelve la acción del botón,
+            // que alterna. Si cerráramos en el mouseDown, el mouseUp lo volvería a abrir.
+            if let barWindow = self.highlightedItem?.button?.window, event.window === barWindow {
+                return event
+            }
             if event.window !== self.panel { self.close() }
             return event
         }
@@ -432,7 +519,24 @@ final class PanelUI: NSObject {
         ) { [weak self] _ in self?.close() }
     }
 
+    /// Indica si el panel está en pantalla, para que el ítem de la barra pueda alternarlo.
+    var isOpen: Bool { panel.isVisible }
+
+    /// Instante del último cierre. Un clic en la barra puede quitarle el foco al panel y cerrarlo
+    /// antes de que llegue el `mouseUp`; sin esta marca ese clic lo reabriría en vez de cerrarlo.
+    private(set) var lastClosedAt: Date?
+
+    /// Indica si el panel se acaba de cerrar por el clic que está en curso.
+    var closedByCurrentClick: Bool {
+        guard let lastClosedAt = lastClosedAt else { return false }
+        return Date().timeIntervalSince(lastClosedAt) < 0.25
+    }
+
+    /// Cierra el panel desde fuera de la clase.
+    func dismiss() { close() }
+
     private func close() {
+        if panel.isVisible { lastClosedAt = Date() }
         panel.orderOut(nil)
         highlightedItem?.button?.highlight(false)
         highlightedItem = nil
