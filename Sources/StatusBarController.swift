@@ -2,10 +2,21 @@ import AppKit
 
 /// Coordina proveedores, historial, notificaciones y barra de estado.
 final class StatusBarController: NSObject {
+    private let baseInterval: TimeInterval = 300
+    private let maximumBackoff: TimeInterval = 1800
+    private let panelRefreshAge: TimeInterval = 120
+
+    private struct RefreshState {
+        var consecutiveFailures = 0
+        var retryAt: Date?
+        var isFetching = false
+    }
+
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let providers: [QuotaProvider]
     private var snapshots: [String: Snapshot] = [:]
     private var histories: [String: UsageHistory] = [:]
+    private var refreshStates: [String: RefreshState] = [:]
     private let panel: PanelUI
     private let notifier = Notifier()
     private var timer: Timer?
@@ -20,18 +31,40 @@ final class StatusBarController: NSObject {
         item.button?.action = #selector(clicked(_:))
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         panel.onRefresh = { [weak self] in
-            self?.refresh()
+            self?.requestRefresh(force: true, onlyIfStale: false)
         }
 
-        refresh()
-        let timer = Timer(timeInterval: 60, target: self, selector: #selector(refresh), userInfo: nil, repeats: true)
+        scheduledRefresh()
+        let timer = Timer(
+            timeInterval: baseInterval,
+            target: self,
+            selector: #selector(scheduledRefresh),
+            userInfo: nil,
+            repeats: true
+        )
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
 
-    /// Solicita un snapshot actualizado a cada proveedor.
-    @objc func refresh() {
+    /// Solicita snapshots, respetando el backoff independiente de cada proveedor.
+    @objc private func scheduledRefresh() {
+        requestRefresh(force: false, onlyIfStale: false)
+    }
+
+    private func requestRefresh(force: Bool, onlyIfStale: Bool) {
         for provider in providers {
+            var state = refreshStates[provider.id] ?? RefreshState()
+            if state.isFetching || state.retryAt.map({ $0 > Date() }) == true {
+                continue
+            }
+            if !force,
+               onlyIfStale,
+               let fetchedAt = snapshots[provider.id]?.fetchedAt,
+               Date().timeIntervalSince(fetchedAt) <= panelRefreshAge {
+                continue
+            }
+            state.isFetching = true
+            refreshStates[provider.id] = state
             provider.fetch { [weak self] result in
                 DispatchQueue.main.async {
                     self?.received(provider, result)
@@ -44,16 +77,34 @@ final class StatusBarController: NSObject {
     private func received(_ provider: QuotaProvider, _ result: Result<Snapshot, Error>) {
         switch result {
         case .success(let snapshot):
-            snapshots[provider.id] = snapshot
+            var fresh = snapshot
+            fresh.error = nil
+            fresh.retryAt = nil
+            snapshots[provider.id] = fresh
+            refreshStates[provider.id] = RefreshState()
             if let short = snapshot.short, let week = snapshot.week {
                 let history = history(for: provider)
                 history.append(short: short.percent, week: week.percent)
                 notifier.check(provider: provider, snapshot: snapshot, anomaly: history.result())
             }
         case .failure(let error):
+            let quotaError = error as? QuotaError ?? QuotaError(error.localizedDescription)
+            var state = refreshStates[provider.id] ?? RefreshState()
+            state.consecutiveFailures += 1
+            state.isFetching = false
+            let calculated = min(
+                baseInterval * pow(2, Double(state.consecutiveFailures)),
+                maximumBackoff
+            )
+            let delay = quotaError.retryAfter.map { $0 + 5 } ?? calculated
+            state.retryAt = Date().addingTimeInterval(delay)
+            refreshStates[provider.id] = state
             if var snapshot = snapshots[provider.id] {
-                snapshot.error = error.localizedDescription
+                snapshot.error = quotaError
+                snapshot.retryAt = state.retryAt
                 snapshots[provider.id] = snapshot
+            } else {
+                snapshots[provider.id] = Snapshot(error: quotaError, retryAt: state.retryAt)
             }
         }
 
@@ -182,7 +233,7 @@ final class StatusBarController: NSObject {
         if event.type == .rightMouseUp {
             panel.menu().popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
         } else {
-            refresh()
+            requestRefresh(force: false, onlyIfStale: true)
             panel.show(relativeTo: button, item: item)
         }
     }

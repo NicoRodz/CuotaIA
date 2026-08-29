@@ -3,7 +3,7 @@ import Foundation
 /// Piso para ignorar fluctuaciones de consumo demasiado pequeñas.
 private let minimumAnomalyRate = 0.35
 /// Ventana máxima entre muestras para calcular una tasa comparable.
-private let maximumRateWindowSeconds = 15.0 * 60.0
+private let maximumRateWindowSeconds = 25.0 * 60.0
 /// Cantidad mínima de tasas históricas para establecer una línea base confiable.
 private let minimumBaselineSamples = 30
 /// Cantidad de tasas recientes usadas para suavizar la detección actual.

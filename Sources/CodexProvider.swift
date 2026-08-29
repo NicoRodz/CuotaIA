@@ -36,6 +36,15 @@ final class CodexProvider: QuotaProvider {
         let rate_limit: Limit?
     }
 
+    /// Estructura de error común que devuelven las APIs HTTP.
+    private struct ErrorResponse: Decodable {
+        struct APIError: Decodable {
+            let message: String?
+        }
+
+        let error: APIError?
+    }
+
     /// Consulta la API de uso y convierte su respuesta en un snapshot común.
     func fetch(completion: @escaping (Result<Snapshot, Error>) -> Void) {
         let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
@@ -60,12 +69,21 @@ final class CodexProvider: QuotaProvider {
         request.setValue(credentials.tokens.account_id, forHTTPHeaderField: "chatgpt-account-id")
 
         URLSession(configuration: .ephemeral).dataTask(with: request) { data, response, error in
-            if let http = response as? HTTPURLResponse,
-               http.statusCode == 401 || http.statusCode == 403 {
-                self.availability = .needsLogin("Inicia sesión en Codex")
-            }
             if let error = error {
                 completion(.failure(error))
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                completion(.failure(QuotaError("Codex no devolvió una respuesta HTTP")))
+                return
+            }
+            guard http.statusCode == 200 else {
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    self.availability = .needsLogin("Inicia sesión en Codex")
+                    completion(.failure(QuotaError("Inicia sesión en Codex", statusCode: http.statusCode)))
+                    return
+                }
+                completion(.failure(self.httpError(http, data: data)))
                 return
             }
             guard let data = data else {
@@ -90,6 +108,23 @@ final class CodexProvider: QuotaProvider {
                 completion(.failure(error))
             }
         }.resume()
+    }
+
+    /// Convierte una respuesta HTTP fallida en un error que conserva su contexto útil.
+    private func httpError(_ response: HTTPURLResponse, data: Data?) -> QuotaError {
+        let body = data.flatMap { try? JSONDecoder().decode(ErrorResponse.self, from: $0) }
+        let detail = body?.error?.message
+        if response.statusCode == 429 {
+            return QuotaError(
+                detail ?? "Rate limit",
+                statusCode: response.statusCode,
+                isRateLimited: true,
+                retryAfter: TimeInterval(response.value(forHTTPHeaderField: "Retry-After") ?? "")
+            )
+        }
+        let message = detail.map { "HTTP \(response.statusCode): \($0)" }
+            ?? "HTTP \(response.statusCode)"
+        return QuotaError(message, statusCode: response.statusCode)
     }
 
     /// Convierte una ventana de la API al modelo común de cuota.

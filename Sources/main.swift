@@ -49,9 +49,17 @@ func cliOnce() {
                 case .needsLogin(let message):
                     print("\(provider.displayName): disponibilidad=needsLogin \(message)")
                 case .ready:
+                    if let quotaError = error as? QuotaError, quotaError.isRateLimited {
+                        let retryAfter = quotaError.retryAfter.map { String(Int($0)) } ?? "-"
+                        print(
+                            "\(provider.displayName): disponibilidad=ready " +
+                                "error=rate_limit retry_after=\(retryAfter)"
+                        )
+                        return
+                    }
                     print(
                         "\(provider.displayName): disponibilidad=ready " +
-                            "error \(error.localizedDescription)"
+                            "error=\(error.localizedDescription)"
                     )
                 }
             }
@@ -175,6 +183,13 @@ if args.count > 1 && args[1] == "--once" {
 } else if args.count == 3 && args[1] == "--render" {
     exit(Int32(render(args[2])))
 } else {
+    let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.nicorodz.cuotaia"
+    let otherInstances = NSRunningApplication.runningApplications(
+        withBundleIdentifier: bundleIdentifier
+    ).filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    if !otherInstances.isEmpty {
+        exit(0)
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate

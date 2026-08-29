@@ -18,7 +18,7 @@ mucho más limpia para estimar un ritmo.
 
 ## Cómo se muestrea
 
-Cada 60 segundos se anexa una línea a `~/Library/Application Support/CuotaIA/history-<id>.jsonl`:
+Cada 5 minutos se anexa una línea a `~/Library/Application Support/CuotaIA/history-<id>.jsonl`:
 
 ```json
 {"t":1787977055,"s":34.0,"w":66.0}
@@ -26,6 +26,10 @@ Cada 60 segundos se anexa una línea a `~/Library/Application Support/CuotaIA/hi
 
 `t` epoch en segundos, `s` la ventana corta, `w` la semanal. Se podan las muestras de más de
 14 días al arrancar. El archivo es tuyo y no sale de tu Mac.
+
+Cuando una consulta falla, la app aplica un backoff exponencial por proveedor (hasta 30 minutos,
+respetando la cabecera `Retry-After`), así que el intervalo real entre muestras puede ser mayor
+que 5 minutos. Por eso el descarte está en 25 y no en 15.
 
 ## Cómo se calcula el ritmo
 
@@ -42,7 +46,7 @@ Se descarta la pareja si:
 | Condición | Por qué |
 |---|---|
 | `dt < 0,5 min` | dos lecturas casi simultáneas: el cociente se dispara por ruido |
-| `dt > 15 min` | el Mac durmió o la app estuvo cerrada; el consumo no ocurrió "en ese rato" |
+| `dt > 25 min` | el Mac durmió o la app estuvo cerrada; el consumo no ocurrió "en ese rato" |
 | `dw < 0` | la ventana semanal se reseteó |
 
 ## Cuál es tu ritmo normal
@@ -81,8 +85,11 @@ primera vez que abre una sesión. 0,35 pp/min son 21 puntos por hora: a ese ritm
 completa se consume en menos de cinco horas seguidas. Ese es exactamente el evento que vale la
 pena interrumpirte.
 
-**Tres muestras, no una.** Promediar tres minutos evita que un solo tick raro —una lectura
-retrasada, un salto por redondeo del servidor— genere un falso positivo.
+**Tres muestras, no una.** Promediar tres lecturas evita que un solo tick raro —una lectura
+retrasada, un salto por redondeo del servidor— genere un falso positivo. El precio es la latencia:
+con muestreo cada 5 minutos, una ráfaga tarda unos 15 minutos en avisarte. El muestreo no puede
+ser más rápido porque el endpoint de cuota de Anthropic corta a las pocas peticiones por minuto,
+y una app que se autolimita deja de servir para lo que existe.
 
 **Menos de 30 tasas positivas en el historial: no hay base.** Durante los primeros días la app
 usa solo el piso. Prefiere no avisar a avisar mal: una alerta que se equivoca al principio es

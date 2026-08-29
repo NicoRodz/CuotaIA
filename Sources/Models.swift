@@ -43,7 +43,8 @@ struct Snapshot {
     var week: QuotaWindow?
     var details: [QuotaDetail] = []
     var fetchedAt: Date?
-    var error: String?
+    var error: QuotaError?
+    var retryAt: Date?
 
     /// Indica si el proveedor todavía no entregó ninguna ventana de cuota.
     var isEmpty: Bool {
@@ -77,13 +78,24 @@ protocol QuotaProvider: AnyObject {
 /// Error cuyo mensaje está listo para presentarse a una persona.
 struct QuotaError: LocalizedError {
     let message: String
+    let statusCode: Int?
+    let isRateLimited: Bool
+    let retryAfter: TimeInterval?
 
     var errorDescription: String? {
         message
     }
 
     /// Crea un error de cuota con un texto legible.
-    init(_ message: String) {
+    init(
+        _ message: String,
+        statusCode: Int? = nil,
+        isRateLimited: Bool = false,
+        retryAfter: TimeInterval? = nil
+    ) {
         self.message = message
+        self.statusCode = statusCode
+        self.isRateLimited = isRateLimited
+        self.retryAfter = retryAfter
     }
 }

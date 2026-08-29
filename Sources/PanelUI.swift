@@ -227,10 +227,33 @@ final class PanelUI: NSObject {
         box.addArrangedSubview(title)
         box.setCustomSpacing(6, after: title)
 
+        if let status = statusMessage(provider: provider, snapshot: snapshot) {
+            box.addArrangedSubview(label(status, size: 11, color: .tertiaryLabelColor))
+        }
         if let short = snapshot.short { box.addArrangedSubview(headline(short)) }
         if let week = snapshot.week { box.addArrangedSubview(window("Semana", window: week)) }
         for detail in snapshot.details { box.addArrangedSubview(detailRow(detail)) }
         return box
+    }
+
+    /// Resume el último fallo sin ocultar las ventanas obtenidas correctamente.
+    private func statusMessage(provider: QuotaProvider, snapshot: Snapshot) -> String? {
+        if case .needsLogin = provider.availability {
+            return "sesión expirada · abre claude o codex"
+        }
+        guard let error = snapshot.error else { return nil }
+        if error.isRateLimited {
+            let seconds = max(0, snapshot.retryAt?.timeIntervalSinceNow ?? 0)
+            let minutes = max(1, Int(ceil(seconds / 60)))
+            return "sin actualizar · reintenta en \(minutes) min"
+        }
+        if let fetchedAt = snapshot.fetchedAt {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "es_CL")
+            formatter.dateFormat = "HH:mm"
+            return "sin conexión · última lectura \(formatter.string(from: fetchedAt))"
+        }
+        return "sin conexión"
     }
 
     private func headline(_ window: QuotaWindow) -> NSView {

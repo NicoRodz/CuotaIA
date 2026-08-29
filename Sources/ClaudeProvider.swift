@@ -50,6 +50,15 @@ final class ClaudeProvider: QuotaProvider {
         let limits: [Limit]?
     }
 
+    /// Estructura de error común que devuelven las APIs HTTP.
+    private struct ErrorResponse: Decodable {
+        struct APIError: Decodable {
+            let message: String?
+        }
+
+        let error: APIError?
+    }
+
     /// Consulta la API de uso y convierte la respuesta en un snapshot común.
     func fetch(completion: @escaping (Result<Snapshot, Error>) -> Void) {
         guard let data = keychainData() else {
@@ -80,12 +89,21 @@ final class ClaudeProvider: QuotaProvider {
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
 
         URLSession(configuration: .ephemeral).dataTask(with: request) { data, response, error in
-            if let http = response as? HTTPURLResponse,
-               http.statusCode == 401 || http.statusCode == 403 {
-                self.availability = .needsLogin("Inicia sesión en Claude Code")
-            }
             if let error = error {
                 completion(.failure(error))
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                completion(.failure(QuotaError("Claude no devolvió una respuesta HTTP")))
+                return
+            }
+            guard http.statusCode == 200 else {
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    self.availability = .needsLogin("Inicia sesión en Claude Code")
+                    completion(.failure(QuotaError("Inicia sesión en Claude Code", statusCode: http.statusCode)))
+                    return
+                }
+                completion(.failure(self.httpError(http, data: data)))
                 return
             }
             guard let data = data else {
@@ -119,6 +137,23 @@ final class ClaudeProvider: QuotaProvider {
                 completion(.failure(error))
             }
         }.resume()
+    }
+
+    /// Convierte una respuesta HTTP fallida en un error que conserva su contexto útil.
+    private func httpError(_ response: HTTPURLResponse, data: Data?) -> QuotaError {
+        let body = data.flatMap { try? JSONDecoder().decode(ErrorResponse.self, from: $0) }
+        let detail = body?.error?.message
+        if response.statusCode == 429 {
+            return QuotaError(
+                detail ?? "Rate limit",
+                statusCode: response.statusCode,
+                isRateLimited: true,
+                retryAfter: TimeInterval(response.value(forHTTPHeaderField: "Retry-After") ?? "")
+            )
+        }
+        let message = detail.map { "HTTP \(response.statusCode): \($0)" }
+            ?? "HTTP \(response.statusCode)"
+        return QuotaError(message, statusCode: response.statusCode)
     }
 
     /// Lee las credenciales del llavero que mantiene Claude Code.
