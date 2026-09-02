@@ -432,18 +432,14 @@ final class PanelUI: NSObject {
         loginRow.addArrangedSubview(toggle)
         box.addArrangedSubview(loginRow)
 
-        let anclaRow = horizontal()
-        anclaRow.addArrangedSubview(label("Anclar ventana de 5 h", size: 12))
-        anclaRow.addArrangedSubview(expander())
-        let ancla = NSSwitch()
-        ancla.target = self
-        ancla.action = #selector(toggleAncla(_:))
-        ancla.state = VentanaAncla.habilitada ? .on : .off
-        ancla.toolTip = "Fija el reset de la ventana de 5 h en 06/11/16/21 con un mensaje mínimo a Haiku."
-        anclaRow.addArrangedSubview(ancla)
-        box.addArrangedSubview(anclaRow)
+        // El interruptor del anclaje está fuera del panel a propósito mientras se evalúa la
+        // función. La vía en uso es el LaunchAgent del extra, y tener las dos disponibles
+        // invita a dejar dos escritores sobre el mismo estado en disco, lo que ensucia la
+        // única evidencia que sirve para decidir: el log de anclajes. La línea de estado sí
+        // se queda, porque responde la pregunta que el panel no podía responder — si el
+        // anclaje está activo y por cuál vía. `toggleAncla` sigue disponible para reponerlo.
         box.addArrangedSubview(anclaEstado())
-        box.setCustomSpacing(4, after: anclaRow)
+        box.setCustomSpacing(4, after: loginRow)
 
         let actions = horizontal()
         let refresh = button("Actualizar", action: #selector(refresh))
