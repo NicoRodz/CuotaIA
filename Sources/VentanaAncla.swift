@@ -359,3 +359,173 @@ final class VentanaAncla {
         return String(format: "%.1f%%", value)
     }
 }
+
+// MARK: - Estado visible en el panel
+
+/// Foto de quién está sosteniendo la rejilla, para que el panel pueda decirlo.
+///
+/// Existe porque el anclaje puede venir por dos vías independientes: el interruptor de esta app
+/// (`VentanaAncla.habilitada`, en `UserDefaults`) y el LaunchAgent que instala
+/// `extras/ventana-ancla/instalar.sh`. El interruptor solo refleja la primera, así que con el
+/// LaunchAgent puesto y el interruptor apagado el panel afirmaba, de hecho, algo falso.
+extension VentanaAncla {
+    /// Label del LaunchAgent que instala el script de `extras/ventana-ancla`.
+    static let agentLabel = "cl.claude.ventana-ancla"
+
+    struct Estado {
+        /// El interruptor de la app está encendido.
+        let app: Bool
+        /// El LaunchAgent está cargado en la sesión gráfica del usuario.
+        let agente: Bool
+        /// El log compartido existe. Si no existe, no hay nada que afirmar sobre anclajes previos.
+        let hayLog: Bool
+        /// Última línea `ANCLADA` del log, ya resumida.
+        let ultimoAnclaje: String?
+
+        /// Texto tal como se muestra bajo el interruptor.
+        var texto: String {
+            var lineas: [String] = []
+            switch (app, agente) {
+            case (true, true):
+                lineas.append(
+                    "Activo por dos vías: el interruptor de arriba y el agente de fondo. " +
+                        "No se duplican los mensajes de anclaje, porque ambos marcan y leen los " +
+                        "mismos targets en ~/.claude/state/ventana-ancla.state."
+                )
+            case (true, false):
+                lineas.append("Activo solo por el interruptor de arriba; el agente de fondo no está cargado.")
+            case (false, true):
+                lineas.append("Activo solo por el agente de fondo; el interruptor de arriba está apagado.")
+            case (false, false):
+                lineas.append("Sin anclar: ni el interruptor de arriba ni el agente de fondo están activos.")
+            }
+            if hayLog {
+                lineas.append(ultimoAnclaje.map { "Último anclaje: \($0)." } ?? "Sin anclajes aún.")
+            }
+            return lineas.joined(separator: "\n")
+        }
+    }
+
+    /// Último estado sondeado. Se escribe y se lee siempre desde el hilo principal.
+    private static var cache: Estado?
+
+    /// Lo que el panel puede dibujar sin esperar a `launchctl`.
+    static var estadoConocido: Estado? { cache }
+
+    /// Sondea fuera del hilo principal y entrega el resultado en el principal.
+    ///
+    /// Preguntarle a `launchctl` implica lanzar un proceso: hacerlo mientras se arma el panel
+    /// dejaría la apertura esperando por un proceso externo.
+    static func refrescarEstado(_ completion: @escaping (Estado) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let estado = sondearEstado()
+            DispatchQueue.main.async {
+                cache = estado
+                completion(estado)
+            }
+        }
+    }
+
+    /// Sondea en línea y deja el resultado en la caché. Bloquea: solo para el renderizador de CLI,
+    /// que captura el panel de una vez y no tiene run loop que reciba una respuesta asíncrona.
+    static func prepararEstado() {
+        cache = sondearEstado()
+    }
+
+    /// Lee las dos vías y el log. Bloquea mientras `launchctl` responde.
+    static func sondearEstado() -> Estado {
+        let logURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/logs/ventana-ancla.log")
+        let lineas = ultimasLineas(de: logURL)
+        return Estado(
+            app: habilitada,
+            agente: agenteCargado(),
+            hayLog: lineas != nil,
+            ultimoAnclaje: (lineas ?? []).last { $0.contains("ANCLADA") }.map(resumen)
+        )
+    }
+
+    /// ¿Está cargado el LaunchAgent? Se le pregunta a `launchctl`, no al disco: un plist en
+    /// `~/Library/LaunchAgents` sin `bootstrap` no ancla nada, y borrarlo con el agente cargado
+    /// tampoco lo detiene.
+    private static func agenteCargado() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", "gui/\(getuid())/\(agentLabel)"]
+        // Solo interesa el código de salida (0 = cargado). Descartar la salida evita además que la
+        // ficha completa que imprime `launchctl` llene un pipe que nadie lee y bloquee al hijo.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+
+        // Techo de 3 s. `launchctl` responde en milisegundos, pero un cuelgue no debe dejar
+        // esperando para siempre a la cola que trae el estado del panel. SIGTERM antes de SIGKILL,
+        // y sin dejar al hijo sin recoger.
+        let deadline = Date().addingTimeInterval(3)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        guard !process.isRunning else {
+            process.terminate()
+            for _ in 0..<20 {
+                guard process.isRunning else { return false }
+                usleep(50_000)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
+            return false
+        }
+        return process.terminationStatus == 0
+    }
+
+    /// Cola del log compartido, o `nil` si el archivo no existe.
+    ///
+    /// Se leen los últimos 64 KB en vez del archivo completo: el log no rota y solo interesa el
+    /// final. Cuando hubo recorte se descarta la primera línea, que viene partida al medio.
+    private static func ultimasLineas(de url: URL) -> [String]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let end = try? handle.seekToEnd() else { return nil }
+        let ventana: UInt64 = 64 * 1024
+        let offset = end > ventana ? end - ventana : 0
+        guard (try? handle.seek(toOffset: offset)) != nil else { return nil }
+        // `readToEnd()` devuelve `nil` en EOF: un log recién creado y vacío sigue siendo un log que
+        // existe, y debe decir "sin anclajes aún" en vez de callar la línea entera.
+        let data = (try? handle.readToEnd()) ?? Data()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        var lineas = text.split(separator: "\n").map(String.init)
+        if offset > 0, !lineas.isEmpty { lineas.removeFirst() }
+        return lineas
+    }
+
+    /// Resume una línea `ANCLADA` del log en algo legible bajo el interruptor.
+    private static func resumen(_ line: String) -> String {
+        var partes: [String] = []
+        if let fecha = stampFormatter.date(from: String(line.prefix(19))) {
+            // El punto abreviado del mes se quita igual que en las etiquetas de reset del panel.
+            partes.append(humanFormatter.string(from: fecha).replacingOccurrences(of: ".", with: ""))
+        }
+        if let target = campo("target", in: line) { partes.append("rejilla de \(target)") }
+        if let reset = campo("reset", in: line) { partes.append("reset a las \(reset)") }
+        if let desvio = campo("desvio", in: line) {
+            partes.append("corrido \(desvio.replacingOccurrences(of: "min", with: " min"))")
+        }
+        return partes.isEmpty ? line : partes.joined(separator: ", ")
+    }
+
+    /// Valor de un `clave=valor` de la línea del log.
+    private static func campo(_ key: String, in line: String) -> String? {
+        for token in line.split(separator: " ") where token.hasPrefix("\(key)=") {
+            return String(token.dropFirst(key.count + 1))
+        }
+        return nil
+    }
+
+    /// Fecha en castellano para mostrar; el log se sigue escribiendo con el formateador fijo.
+    private static let humanFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "es_CL")
+        formatter.dateFormat = "d MMM HH:mm"
+        return formatter
+    }()
+}
