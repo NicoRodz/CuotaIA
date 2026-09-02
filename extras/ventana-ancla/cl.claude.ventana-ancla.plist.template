@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>cl.claude.ventana-ancla</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HOME__/.claude/bin/ventana-ancla.sh</string>
+  </array>
+
+  <!-- Cada 10 min. El script sale de inmediato si la hora no cae en la ventana de
+       gracia de un target, así que el costo real es despreciable. StartInterval, a
+       diferencia de cron, ejecuta el disparo vencido cuando el Mac despierta: si el
+       Mac duerme a la hora del ancla, el disparo no se pierde (llega tarde, y para
+       eso está la ventana de gracia). -->
+  <key>StartInterval</key>
+  <integer>600</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.claude/logs/ventana-ancla.out</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.claude/logs/ventana-ancla.err</string>
+</dict>
+</plist>
