@@ -19,6 +19,7 @@ final class StatusBarController: NSObject {
     private var refreshStates: [String: RefreshState] = [:]
     private let panel: PanelUI
     private let notifier = Notifier()
+    private let ancla = VentanaAncla()
     private var timer: Timer?
 
     /// Configura los proveedores y agenda actualizaciones incluso con el panel abierto.
@@ -44,6 +45,11 @@ final class StatusBarController: NSObject {
         )
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+    }
+
+    /// Corta el heartbeat de anclaje antes de que la app se cierre y lo deje huérfano.
+    func prepareForTermination() {
+        ancla.stop()
     }
 
     /// Solicita snapshots, respetando el backoff independiente de cada proveedor.
@@ -86,6 +92,11 @@ final class StatusBarController: NSObject {
                 let history = history(for: provider)
                 history.append(short: short.percent, week: week.percent)
                 notifier.check(provider: provider, snapshot: snapshot, anomaly: history.result())
+            }
+            // El anclaje se alimenta de este snapshot: no dispara ninguna consulta extra al
+            // endpoint, que tiene rate limit propio.
+            if provider.id == "claude" {
+                ancla.consider(snapshot: fresh)
             }
         case .failure(let error):
             let quotaError = error as? QuotaError ?? QuotaError(error.localizedDescription)

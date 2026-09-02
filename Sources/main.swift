@@ -8,6 +8,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         status = StatusBarController(providers: [ClaudeProvider(), CodexProvider()])
     }
+
+    /// Cierra el heartbeat de anclaje: su techo de 90 s vive en el main queue y muere con la app.
+    func applicationWillTerminate(_ notification: Notification) {
+        status?.prepareForTermination()
+    }
 }
 
 /// Formatea fechas de respuesta para la salida diagnóstica.

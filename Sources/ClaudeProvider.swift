@@ -48,6 +48,26 @@ final class ClaudeProvider: QuotaProvider {
         let five_hour: Window?
         let seven_day: Window?
         let limits: [Limit]?
+        /// Verdadero si la respuesta traía la clave `five_hour`, aunque su valor fuera `null`.
+        ///
+        /// `decodeIfPresent` colapsa "clave ausente" y "clave en null" en el mismo `nil`, y esa
+        /// diferencia importa: la ausencia no autoriza a concluir que no hay ventana activa.
+        let reportsFiveHour: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case five_hour
+            case seven_day
+            case limits
+        }
+
+        /// Decodifica la respuesta conservando si la clave de la ventana corta venía o no.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            five_hour = try container.decodeIfPresent(Window.self, forKey: .five_hour)
+            seven_day = try container.decodeIfPresent(Window.self, forKey: .seven_day)
+            limits = try container.decodeIfPresent([Limit].self, forKey: .limits)
+            reportsFiveHour = container.contains(.five_hour)
+        }
     }
 
     /// Estructura de error común que devuelven las APIs HTTP.
@@ -129,7 +149,8 @@ final class ClaudeProvider: QuotaProvider {
                             week: self.window(value.seven_day),
                             details: details,
                             fetchedAt: Date(),
-                            error: nil
+                            error: nil,
+                            reportsShortWindow: value.reportsFiveHour
                         )
                     )
                 )

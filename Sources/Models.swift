@@ -45,6 +45,11 @@ struct Snapshot {
     var fetchedAt: Date?
     var error: QuotaError?
     var retryAt: Date?
+    /// Indica si la respuesta traía la clave de la ventana corta, aunque viniera vacía.
+    ///
+    /// `short == nil` es ambiguo: puede ser "no hay ventana activa" o "la respuesta ni mencionó la
+    /// ventana". Quien decida algo a partir de una ventana ausente necesita distinguir los dos casos.
+    var reportsShortWindow = true
 
     /// Indica si el proveedor todavía no entregó ninguna ventana de cuota.
     var isEmpty: Bool {

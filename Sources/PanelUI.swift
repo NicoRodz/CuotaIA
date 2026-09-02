@@ -427,6 +427,17 @@ final class PanelUI: NSObject {
         loginRow.addArrangedSubview(toggle)
         box.addArrangedSubview(loginRow)
 
+        let anclaRow = horizontal()
+        anclaRow.addArrangedSubview(label("Anclar ventana de 5 h", size: 12))
+        anclaRow.addArrangedSubview(expander())
+        let ancla = NSSwitch()
+        ancla.target = self
+        ancla.action = #selector(toggleAncla(_:))
+        ancla.state = VentanaAncla.habilitada ? .on : .off
+        ancla.toolTip = "Fija el reset de la ventana de 5 h en 06/11/16/21 con un mensaje mínimo a Haiku."
+        anclaRow.addArrangedSubview(ancla)
+        box.addArrangedSubview(anclaRow)
+
         let actions = horizontal()
         let refresh = button("Actualizar", action: #selector(refresh))
         let quit = button("Salir", action: #selector(quit))
@@ -564,6 +575,10 @@ final class PanelUI: NSObject {
     @objc private func toggleLogin(_ sender: NSButton) {
         login.setEnabled(sender.state == .on)
         sender.state = login.enabled ? .on : .off
+    }
+
+    @objc private func toggleAncla(_ sender: NSButton) {
+        VentanaAncla.habilitada = sender.state == .on
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
