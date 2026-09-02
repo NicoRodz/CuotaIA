@@ -61,6 +61,8 @@ final class PanelUI: NSObject {
     private var localMonitor: Any?
     private var resignObserver: NSObjectProtocol?
     private weak var highlightedItem: NSStatusItem?
+    /// La línea de estado del anclaje, para poder reescribirla sin rearmar el pie del panel.
+    private weak var anclaEstadoField: NSTextField?
 
     override init() {
         glass = PanelUI.makeRoot(glass: true, appearance: nil)
@@ -130,6 +132,9 @@ final class PanelUI: NSObject {
     /// Captura la jerarquía de vistas del panel sin mostrar ninguna ventana.
     static func render(providers: [QuotaProvider], snapshots: [String: Snapshot], to url: URL) throws
         -> [(url: URL, size: NSSize)] {
+        // El panel dibuja el estado del anclaje desde la caché y la rellena de forma asíncrona. Acá
+        // no hay run loop que reciba esa respuesta, así que se sondea en línea antes de capturar.
+        VentanaAncla.prepararEstado()
         let appearances: [(String, NSAppearance.Name)] = [("light", .aqua), ("dark", .darkAqua)]
         return try appearances.map { suffix, name in
             let appearance = NSAppearance(named: name)!
@@ -437,6 +442,8 @@ final class PanelUI: NSObject {
         ancla.toolTip = "Fija el reset de la ventana de 5 h en 06/11/16/21 con un mensaje mínimo a Haiku."
         anclaRow.addArrangedSubview(ancla)
         box.addArrangedSubview(anclaRow)
+        box.addArrangedSubview(anclaEstado())
+        box.setCustomSpacing(4, after: anclaRow)
 
         let actions = horizontal()
         let refresh = button("Actualizar", action: #selector(refresh))
@@ -446,6 +453,38 @@ final class PanelUI: NSObject {
         actions.addArrangedSubview(quit)
         box.addArrangedSubview(actions)
         return box
+    }
+
+    /// Línea que dice por cuál de las dos vías está activo el anclaje.
+    ///
+    /// El interruptor de arriba solo refleja la vía nativa; el LaunchAgent del script vive fuera de
+    /// `UserDefaults` y no aparece ahí. Sin esta línea, quien tiene el agente cargado ve el
+    /// interruptor apagado y concluye que la rejilla no se está sosteniendo.
+    private func anclaEstado() -> NSTextField {
+        let estado = VentanaAncla.estadoConocido
+        let field = label(
+            estado?.texto ?? "Comprobando por qué vía está el anclaje…",
+            size: 11,
+            color: .tertiaryLabelColor
+        )
+        field.maximumNumberOfLines = 0
+        field.lineBreakMode = .byWordWrapping
+        field.preferredMaxLayoutWidth = PanelUI.rowWidth
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: PanelUI.rowWidth).isActive = true
+        anclaEstadoField = field
+        refrescarAnclaEstado()
+        return field
+    }
+
+    /// Detectar el LaunchAgent exige lanzar `launchctl`: se pregunta en una cola de fondo y el panel
+    /// se reajusta cuando llega la respuesta, en vez de bloquear la apertura.
+    private func refrescarAnclaEstado() {
+        VentanaAncla.refrescarEstado { [weak self] estado in
+            guard let self = self, let field = self.anclaEstadoField else { return }
+            field.stringValue = estado.texto
+            self.layoutPanel()
+        }
     }
 
     private func separator() -> NSView {
@@ -579,6 +618,7 @@ final class PanelUI: NSObject {
 
     @objc private func toggleAncla(_ sender: NSButton) {
         VentanaAncla.habilitada = sender.state == .on
+        refrescarAnclaEstado()
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
